@@ -1,8 +1,12 @@
 package enr
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"github.com/ethereum/go-ethereum/rlp"
+	"io"
+	"sort"
 )
 
 // enr包支持"secp256k1-keccak"
@@ -52,6 +56,12 @@ type Record struct {
 	pairs     []pair // 所有key/value对的存储列表
 }
 
+// 记录中的key/value对
+type pair struct {
+	k string
+	v rlp.RawValue
+}
+
 // 获取序列号
 func (r *Record) Seq() uint64 {
 	return r.seq
@@ -64,3 +74,134 @@ func (r *Record) SetSeq(s uint64) {
 	r.raw = nil
 	r.seq = s
 }
+
+// Load 检索一个key/value对的值。所给的Entity必须是一个指针类型，并且会更新记录里对应的值
+// 返回的是KeyError包装的error，你可以使用IsNotFound函数从丢失的keys中区分解码errors
+
+/*
+  @Author
+  查询记录中是否已经存在
+*/
+func (r *Record) Load(e Entity) error {
+	i := sort.Search(len(r.pairs), func(i int) bool {
+		return r.pairs[i].k >= e.ENRKey()
+	})
+	if i < len(r.pairs) && r.pairs[i].k == e.ENRKey() {
+		if err := rlp.DecodeBytes(r.pairs[i].v, e); err != nil {
+			return &KeyError{Key: e.ENRKey(), Err: err}
+		}
+		return nil
+	}
+	return &KeyError{Key: e.ENRKey(), Err: errNotFound}
+}
+
+// Set 添加或者更新记录中的Entity
+// 如果value不能被编码会引发panic。如果该记录已经签名，Set方法会使序列号增大，并且废弃原来的序列号
+func (r *Record) Set(e Entity) {
+	blob, err := rlp.EncodeToBytes(e)
+	if err != nil {
+		panic(fmt.Errorf("enr: can't encode %s: %v", e.ENRKey(), err))
+	}
+	r.invalidate()
+
+	pairs := make([]pair, len(r.pairs))
+	copy(pairs, r.pairs)
+	i := sort.Search(len(pairs), func(i int) bool {
+		return pairs[i].k >= e.ENRKey()
+	})
+	switch {
+	case i < len(pairs) && pairs[i].k == e.ENRKey():
+		// 元素出现在r.pairs[i]
+		pairs[i].v = blob
+	case i < len(r.pairs):
+		// 将元素插入到第i个下标
+		el := pair{e.ENRKey(), blob}
+		pairs = append(pairs, pair{})
+		copy(pairs[i+1:], pairs[i:])
+		pairs[i] = el
+	default:
+		// 元素放置在r.pairs的队尾
+		pairs = append(pairs, pair{e.ENRKey(), blob})
+	}
+}
+
+func (r *Record) invalidate() {
+	if r.signature != nil {
+		r.seq++
+	}
+	r.signature = nil
+	r.raw = nil
+}
+
+// EncodeRLP 实现了rlp.Encoder。如果记录未签名将会编码失败
+func (r *Record) EncodeRLP(w io.Writer) error {
+	if r.signature == nil {
+		return errEncodeUnsigned
+	}
+	_, err := w.Write(r.raw)
+	return err
+}
+
+// DecodeRLP 实现了rlp.Decoder. Decoding验证签名
+func (r *Record) DecodeRLP(s *rlp.Stream) error {
+	dec, raw, err := decodeRecord(s)
+	if err != nil {
+		return err
+	}
+	*r = dec
+	r.raw = raw
+	return nil
+}
+
+// TODO 未分析代码
+func decodeRecord(s *rlp.Stream) (dec Record, raw []byte, err error) {
+	raw, err = s.Raw()
+	if err != nil {
+		return dec, raw, err
+	}
+	if len(raw) > SizeLimit {
+		return dec, raw, errTooBig
+	}
+
+	// 解码RLP容器
+	s = rlp.NewStream(bytes.NewReader(raw), 0)
+	if _, err := s.List(); err != nil {
+		return dec, raw, err
+	}
+	if err = s.Decode(&dec.signature); err != nil {
+		return dec, raw, err
+	}
+	if err = s.Decode(&dec.seq); err != nil {
+		return dec, raw, err
+	}
+	// 记录剩余的部分包含已存储的k/v
+	var prevkey string
+	for i := 0; ; i++ {
+		var kv pair
+		if err := s.Decode(&kv.k); err != nil {
+			if err == rlp.EOL {
+				break
+			}
+			return dec, raw, err
+		}
+		if err := s.Decode(&kv.v); err != nil {
+			if err == rlp.EOL {
+				return dec, raw, errIncompletePair
+			}
+			return dec, raw, err
+		}
+		if i > 0 {
+			if kv.k == prevkey {
+				return dec, raw, errDuplicateKey
+			}
+			if kv.k < prevkey {
+				return dec, raw, errNotSorted
+			}
+		}
+		dec.pairs = append(dec.pairs, kv)
+		prevkey = kv.k
+	}
+	return dec, raw, s.ListEnd()
+}
+
+// TODO 本文件未完成
