@@ -11,7 +11,7 @@ import (
 
 // 为了定义包含节点记录的实体，创建一个新的Go类型
 // 如果需要对值进行额外检查，该类型还需要实现rlp.Decoder
-type Entity interface {
+type Entry interface {
 	// 获取记录对应的key
 	ENRKey() string
 }
@@ -35,7 +35,7 @@ func (g generic) DecodeRLP(s *rlp.Stream) error {
 
 // WithEntry包含了一个key对应的所有value，它可用于设置和加载记录中的任意值
 // 值v必须是rlp所支持的。如果WithEntry和Load一起使用，该值必须是指针类型
-func WithEntry(k string, v interface{}) Entity {
+func WithEntry(k string, v interface{}) Entry {
 	return &generic{key: k, value: v}
 }
 

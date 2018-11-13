@@ -153,7 +153,6 @@ func (r *Record) DecodeRLP(s *rlp.Stream) error {
 	return nil
 }
 
-// TODO 未分析代码
 func decodeRecord(s *rlp.Stream) (dec Record, raw []byte, err error) {
 	raw, err = s.Raw()
 	if err != nil {
@@ -204,4 +203,64 @@ func decodeRecord(s *rlp.Stream) (dec Record, raw []byte, err error) {
 	return dec, raw, s.ListEnd()
 }
 
-// TODO 本文件未完成
+// IdentityScheme 获取记录的身份标识
+func (r *Record) IdentityScheme() string {
+	var id ID
+	r.Load(&id)
+	return string(id)
+}
+
+// VerifySignature 检查记录是否使用给定的身份编号签名
+func (r *Record) VerifySignature(s IdentityScheme) error {
+	return s.Verify(r, r.signature)
+}
+
+// SetSig 设置记录的签名
+// 如果已编码的记录的长度超过限制或者该签名无效，就会返回error
+// 也可以通过使用一个空的scheme和签名来明确地删除签名
+// 如果scheme或者签名两者其中有一个为空（不包括两者都为空）就会引发panic
+func (r *Record) SetSig(s IdentityScheme, sig []byte) error {
+	switch {
+	// 阻止存储无效数据
+	case s == nil && sig != nil:
+		panic("ner: invalid call to SetSig with non-nil signature but nil scheme")
+	case s != nil && sig == nil:
+		panic("enr: invalid call to SetSig with nil signature but non-nil scheme")
+		// 验证我们是否有scheme
+	case s != nil:
+		if err := s.Verify(r, sig); err != nil {
+			return err
+		}
+		raw, err := r.encode(sig)
+		if err != nil {
+			return err
+		}
+		r.signature, r.raw = sig, raw
+		// 否则重置
+	default:
+		r.signature, r.raw = nil, nil
+	}
+	return nil
+}
+
+// AppendElements 将序列号和其他项添加到所给的slice中
+func (r *Record) AppendElements(list []interface{}) []interface{} {
+	list = append(list, r.seq)
+	for _, p := range r.pairs {
+		list = append(list, p.k, p.v)
+	}
+	return list
+}
+
+func (r *Record) encode(sig []byte) (raw []byte, err error) {
+	list := make([]interface{}, 1, 2*len(r.pairs)+1)
+	list[0] = sig
+	list = r.AppendElements(list)
+	if raw, err = rlp.EncodeToBytes(list); err != nil {
+		return nil, err
+	}
+	if len(raw) > SizeLimit {
+		return nil, errTooBig
+	}
+	return raw, nil
+}
