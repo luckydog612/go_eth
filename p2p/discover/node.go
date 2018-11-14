@@ -3,10 +3,12 @@ package discover
 import (
 	"crypto/ecdsa"
 	"errors"
-	"github.com/EducationEKT/EKT/crypto"
 	"github.com/ethereum/go-ethereum/common/math"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/crypto/secp256k1"
 	"go_eth/p2p/enode"
 	"math/big"
+	"net"
 	"time"
 )
 
@@ -37,4 +39,48 @@ func decodePubkey(e encPubkey) (*ecdsa.PublicKey, error) {
 	return p, nil
 }
 
-// TODO:本文件未完成
+func (e encPubkey) id() enode.ID {
+	return enode.ID(crypto.Keccak256Hash(e[:]))
+}
+
+// recoverNodeKey使用签名计算用于给所给hash签名的公钥
+func recoverNodeKey(hash, sig []byte) (key encPubkey, err error) {
+	pubkey, err := secp256k1.RecoverPubkey(hash, sig)
+	if err != nil {
+		return key, err
+	}
+	copy(key[:], pubkey[1:])
+	return key, nil
+}
+
+func wrapNode(n *enode.Node) *node {
+	return &node{Node: *n}
+}
+
+func wrapNodes(ns []*enode.Node) []*node {
+	result := make([]*node, len(ns))
+	for i, n := range ns {
+		result[i] = wrapNode(n)
+	}
+	return result
+}
+
+func unwrapNode(n *node) *enode.Node {
+	return &n.Node
+}
+
+func unwrapNodes(ns []*node) []*enode.Node {
+	result := make([]*enode.Node, len(ns))
+	for i, n := range ns {
+		result[i] = unwrapNode(n)
+	}
+	return result
+}
+
+func (n *node) addr() *net.UDPAddr {
+	return &net.UDPAddr{IP: n.IP(), Port: n.UDP()}
+}
+
+func (n *node) String() string {
+	return n.Node.String()
+}
