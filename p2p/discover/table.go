@@ -520,6 +520,16 @@ func (tab *Table) add(n *node) {
 	}
 }
 
+// addThroughPing 将所给节点添加到路由表
+// 相比于简单的“add"添加了一项安全措施：如果路由表仍然在初始化，则不添加节点。
+// 这可以阻止通过重复发送ping命令来填充路由表的攻击
+func (tab *Table) addThroughPing(n *node) {
+	if !tab.isInitDone() {
+		return
+	}
+	tab.add(n)
+}
+
 // 如果存储桶未满的话，stuff将添加路由表添加到赌赢的存储桶的最后
 // 调用者必须有tab.mutex
 func (tab *Table) stuff(nodes []*node) {
